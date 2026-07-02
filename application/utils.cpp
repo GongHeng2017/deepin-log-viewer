@@ -6,6 +6,7 @@
 #include "logsettings.h"
 #include "dbusmanager.h"
 #include "dbusproxy/dldbushandler.h"
+#include "opslogpaths.h"
 
 #include <math.h>
 #include <pwd.h>
@@ -558,46 +559,8 @@ void Utils::updateRepeatCoredumpExePaths(const QList<LOG_REPEAT_COREDUMP_INFO> &
     file.close();
 }
 
-static QByteArray processCmdWithArgs(const QString &cmdStr, const QString &workPath, const QStringList &args)
-{
-    QProcess process;
-    if (!workPath.isEmpty())
-        process.setWorkingDirectory(workPath);
-
-    process.setProgram(cmdStr);
-    process.setArguments(args);
-    process.setEnvironment({"LANG=en_US.UTF-8", "LANGUAGE=en_US"});
-    process.start();
-    // Wait for process to finish without timeout.
-    process.waitForFinished(-1);
-    QByteArray outPut = process.readAllStandardOutput();
-    int nExitCode = process.exitCode();
-    bool bRet = (process.exitStatus() == QProcess::NormalExit && nExitCode == 0);
-    if (!bRet) {
-        qDebug() << "run cmd error, caused by:" << process.errorString() << "output:" << outPut;
-        return QByteArray();
-    }
-    return outPut;
-}
-
-QByteArray Utils::executeCmd(const QString &cmdStr, const QStringList &args, const QString &workPath)
-{
-    return processCmdWithArgs(cmdStr, workPath,  args);
-}
-
-static void appendToFile(const QString &filePath, const QByteArray &content)
-{
-    QFile file(filePath);
-
-    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        file.write(content);
-    } else {
-        qWarning() << "Error opening file for writing:" << file.errorString();
-    }
-}
-
 // 查找所有物理网络接口
-QStringList getPhysicalInterfaces()
+QStringList Utils::getPhysicalInterfaces()
 {
     QStringList physicalInterfaces;
     QDir netDir("/sys/class/net/");
@@ -622,7 +585,7 @@ QStringList getPhysicalInterfaces()
     return physicalInterfaces;
 }
 
-static QStringList expandPathWithWildcardIterator(const QString &pathWithWildcard)
+QStringList Utils::expandPathWithWildcardIterator(const QString &pathWithWildcard)
 {
     // 1. 分离目录和文件名模式
     QFileInfo fileInfo(pathWithWildcard);
@@ -646,31 +609,344 @@ static QStringList expandPathWithWildcardIterator(const QString &pathWithWildcar
     return matchedFiles;
 }
 
-void Utils::exportSomeOpsLogs(const QString &outDir, const QString &userHomeDir)
+void Utils::appendToFile(const QString &filePath, const QByteArray &content)
 {
-    Q_UNUSED(userHomeDir)
+    QFile file(filePath);
 
-    std::string tmpCmd;
+    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        file.write(content);
+    } else {
+        qWarning() << "Error opening file for writing:" << file.errorString();
+    }
+}
 
-    // app
-    appendToFile(outDir + "/app/kwin/glxinfo.log", executeCmd("glxinfo", { "-display", qEnvironmentVariable("DISPLAY"), "-B" }));
-    QStringList args = { "-rf" };
+QByteArray Utils::processCmdWithArgs(const QString &cmdStr, const QString &workPath, const QStringList &args)
+{
+    QProcess process;
+    if (!workPath.isEmpty())
+        process.setWorkingDirectory(workPath);
+
+    process.setProgram(cmdStr);
+    process.setArguments(args);
+    process.setEnvironment({"LANG=en_US.UTF-8", "LANGUAGE=en_US"});
+    process.start();
+    // Wait for process to finish without timeout.
+    process.waitForFinished(-1);
+    QByteArray outPut = process.readAllStandardOutput();
+    int nExitCode = process.exitCode();
+    bool bRet = (process.exitStatus() == QProcess::NormalExit && nExitCode == 0);
+    if (!bRet) {
+        qWarning() << "run cmd error, caused by:" << process.errorString() << "output:" << outPut;
+        return QByteArray();
+    }
+    return outPut;
+}
+
+QByteArray Utils::executeCmd(const QString &cmdStr, const QStringList &args, const QString &workPath)
+{
+    return processCmdWithArgs(cmdStr, workPath,  args);
+}
+
+void Utils::exportUserPermissionAppLogs(const QString &outDir, const QString &userHomeDir)
+{
+    QStringList args;
+    // 安全中心
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-defender/deepin-defender.log");
+    args.append(userHomeDir + "/.cache/deepin/deepin-defender-daemon/deepin-defender-daemon.log");
+    args.append(userHomeDir + "/.cache/deepin/deepin-defender-datainterface/deepin-defender-datainterface.log");
+    args.append(outDir + kDefenderPath);
+    executeCmd("cp", args);
+
+    // 云打印
+    args.clear();
+    args.append(userHomeDir + "/.cache/uniontech/deepin-cloud-print/deepin-cloud-print.log");
+    args.append(userHomeDir + "/.cache/uniontech/deepin-cloud-print-configurator/deepin-cloud-print-configurator.log");
+    args.append(outDir + kCloudPrintPath);
+    executeCmd("cp", args);
+
+    // 云扫描
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-cloud-scan/deepin-cloud-scan.log");
+    args.append(outDir + kCloudScanPath);
+    executeCmd("cp", args);
+
+    // 打印管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/dde-printer/dde-printer.log");
+    args.append(outDir + kPrinterPath);
+    executeCmd("cp", args);
+
+    // 显卡驱动管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-graphics-driver-manager/deepin-graphics-driver-manager.log");
+    args.append(outDir + kGraphicsDriverManagerPath);
+    executeCmd("cp", args);
+
+    // 启动盘制作工具
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-boot-maker/deepin-boot-maker.log");
+    args.append(outDir + kBootMakerPath);
+    executeCmd("cp", args);
+
+    // 扫描管理
+    args.clear();
+    args.append("-rf");
+    args.append(userHomeDir + "/.cache/deepin/org.deepin.scanner/org.deepin.scanner");
+    args.append(outDir + kScanerPath);
+    executeCmd("cp", args);
+
+    // KMS项目
+    args.clear();
+    args.append("-rf");
+    args.append(userHomeDir + "/.cache/deepin/kmsclient");
+    args.append(userHomeDir + "/.cache/deepin/kmstools");
+    args.append(outDir + kKMSPath);
+    executeCmd("cp", args);
+
+    // 归档管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-compressor/deepin-compressor.log");
+    args.append(outDir + kCompressorPath);
+    executeCmd("cp", args);
+
+    // 日历
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/dde-calendar-service/dde-calendar-service.log");
+    args.append(userHomeDir + "/.cache/deepin/dde-calendar/dde-calendar.log");
+    args.append(outDir + kCalendarPath);
+    executeCmd("cp", args);
+
+    // 帮助手册
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-manual/deepin-manual.log");
+    args.append(outDir + kManualPath);
+    executeCmd("cp", args);
+
+    // 文档查看器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-reader/deepin-reader.log");
+    args.append(outDir + kReaderPath);
+    executeCmd("cp", args);
+
+    // 字体管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-font-manager/deepin-font-manager.log");
+    args.append(outDir + kFontManagerPath);
+    executeCmd("cp", args);
+
+    // 软件包安装器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-deb-installer/deepin-deb-installer.log");
+    args.append(outDir + kDebInstallerPath);
+    executeCmd("cp", args);
+
+    // 终端
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-terminal/deepin-terminal.log");
+    args.append(outDir + kTerminalPath);
+    executeCmd("cp", args);
+
+    // 语音记事本
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-voice-note/deepin-voice-note.log");
+    args.append(outDir + kVoiceNotPath);
+    executeCmd("cp", args);
+
+    // 设备管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-devicemanager/deepin-devicemanager.log");
+    args.append(outDir + kDevicemanagerPath);
+    executeCmd("cp", args);
+
+    // 服务与支持
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/uos-service-support/uos-service-support.log");
+    args.append(outDir + kServiceSupportPath);
+    executeCmd("cp", args);
+
+    // 远程协助
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/uos-remote-assistance/uos-remote-assistance.log");
+    args.append(outDir + kRemoteAssistancePath);
+    executeCmd("cp", args);
+
+    // 系统监视器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-system-monitor/deepin-system-monitor.log");
+    args.append(outDir + kSystemMonitorPath);
+    executeCmd("cp", args);
+
+    // 文本编辑器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-editor/deepin-editor.log");
+    args.append(outDir + kEditorPath);
+    executeCmd("cp", args);
+
+    // 计算器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-calculator/deepin-calculator.log");
+    args.append(outDir + kCalculatorPath);
+    executeCmd("cp", args);
+
+    // 邮箱
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-mail/deepin-mail.log");
+    args.append(outDir + kMailPath);
+    executeCmd("cp", args);
+
+    // 截图录屏
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-screen-recorder/deepin-screen-recorder.log");
+    args.append(outDir + kScreenRecorderPath);
+    executeCmd("cp", args);
+
+    // 画板
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-draw/deepin-draw.log");
+    args.append(outDir + kDrawPath);
+    executeCmd("cp", args);
+
+    // 音乐
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-music/deepin-music.log");
+    args.append(outDir + kMusicPath);
+    executeCmd("cp", args);
+
+    // 看图
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-image-viewer/deepin-image-viewer.log");
+    args.append(outDir + kImageViewerPath);
+    executeCmd("cp", args);
+
+    // 相册
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-album/deepin-album.log");
+    args.append(outDir + kAlbumPath);
+    executeCmd("cp", args);
+
+    // 影院
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-movie/deepin-movie.log");
+    args.append(outDir + kMoviePath);
+    executeCmd("cp", args);
+
+    // 相机
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-camera/deepin-camera.log");
+    args.append(outDir + kCameraPath);
+    executeCmd("cp", args);
+
+    // 中文输入法
+    args.clear();
+    args.append(userHomeDir + "/.cache/org.deepin.chineseime/ime/chineseime-qimpanel.log");
+    args.append(userHomeDir + "/.cache/org.deepin.chineseime/ime/fcitx-iflyime.log");
+    args.append(userHomeDir + "/.cache/org.deepin.chineseime/ime/ossp.log");
+    args.append(outDir + kChineseImePath);
+    executeCmd("cp", args);
+
+    // 授权管理客户端
+    args.clear();
+    args.append("-rf");
+    args.append(userHomeDir + "/.cache/uos/uos-activator");
+    args.append(userHomeDir + "/.cache/uos/uos-activator-cmd");
+    args.append(userHomeDir + "/.cache/uos-agent/uos-license-agent");
+    args.append(userHomeDir + "/.cache/uos-agent/uos-activator-kms");
+    args.append(outDir + kUosActivatorPath);
+    executeCmd("cp", args);
+
+    // 输入法配置
+    args.clear();
+    args.append("-rf");
     args.append(expandPathWithWildcardIterator("/tmp/fcitx*.log"));
     args.append(outDir + "/app/fcitx/");
     executeCmd("cp", args);
 
+    // 下载器
     args.clear();
-    args << "policy" << "kwin-x11" << "dde-kwin";
-    appendToFile(outDir + "/app/kwin/kwin_info.log", executeCmd("apt", args));
+    args.append("-rf");
+    args.append(userHomeDir + "/.config/uos/downloader/Log");
+    args.append(outDir + kDownloaderPath);
+    executeCmd("cp", args);
 
-    // kernel
+    // 窗口管理器
+    appendToFile(outDir + "/app/kwin/glxinfo.log", executeCmd("glxinfo", { "-display", qEnvironmentVariable("DISPLAY"), "-B" }));
+    appendToFile(outDir + "/app/kwin/kwin_info.log", executeCmd("apt", { "policy", "kwin-x11", "dde-kwin" }));
+
+    // 安卓容器
+    args.clear();
+    args.append(userHomeDir + "/log/AospLog.log");
+    args.append(userHomeDir + "/log/KboxServer.log");
+    args.append(outDir + kKboxPath);
+    executeCmd("cp", args);
+
+    // 日志收集工具
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/deepin-log-viewer/deepin-log-viewer.log");
+    args.append(outDir + kDeepinLogViewerPath);
+    executeCmd("cp", args);
+}
+
+void Utils::exportUserPermissionSystemLogs(const QString &outDir, const QString &userHomeDir)
+{
+    QStringList args;
+
+    // pulse　audio /home/uos/pulse.log
+    args.clear();
+    args.append(userHomeDir + "/pulse.log");
+    args.append(outDir + kSystemPulseaudioPath);
+    executeCmd("cp", args);
+}
+
+void Utils::exportUserPermissionKernelLogs(const QString &outDir)
+{
+    // ⽆法识别声卡问题⽇志
     appendToFile(outDir + "/kernel/aplay.log", executeCmd("aplay", { "-l" }));
+
     for (const QString &iface : getPhysicalInterfaces()) {
         appendToFile(outDir + "/kernel/eth_info.log", executeCmd("ethtool", { "-i", iface }));
     }
+
     appendToFile(outDir + "/kernel/ifconfig.log", executeCmd("ifconfig", { }));
+}
+
+void Utils::exportUserPermissionDDELogs(const QString &outDir, const QString &userHomeDir)
+{
+    QStringList args;
+
+    // 文件管理器
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/dde-desktop/dde-desktop.log");
+    args.append(outDir + kDdeDesktopPath);
+    executeCmd("cp", args);
+
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/dde-file-manager/dde-file-manager.log");
+    args.append(outDir + kDdeFileManagerPath);
+    executeCmd("cp", args);
+
+    // 任务栏
+    args.clear();
+    args.append(userHomeDir + "/.cache/deepin/dde-dock/dde-dock.log");
+    args.append(outDir + kDdeDockPath);
+    executeCmd("cp", args);
+
+    //DDE
+    args.clear();
+    args.append(userHomeDir + "/Desktop/DDE_LOG.zip");
+    args.append(outDir + kDDEPath);
+    executeCmd("cp", args);
+}
+
+void Utils::exportUserPermissionOpsLogs(const QString &outDir, const QString &userHomeDir)
+{
+    Utils::exportUserPermissionAppLogs(outDir, userHomeDir);
+    Utils::exportUserPermissionSystemLogs(outDir, userHomeDir);
+    Utils::exportUserPermissionKernelLogs(outDir);
+    Utils::exportUserPermissionDDELogs(outDir, userHomeDir);
 
     // deb version
+    QStringList args;
     args.clear();
     args << "-l";
     appendToFile(outDir + "/deb-version.txt", executeCmd("dpkg", args));

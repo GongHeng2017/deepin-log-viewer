@@ -32,6 +32,8 @@ using namespace PolkitQt1;
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryFile>
+#include <QFile>
+#include <QTemporaryDir>
 
 #ifdef QT_DEBUG
 Q_LOGGING_CATEGORY(logService, "org.deepin.log.viewer.service")
@@ -1031,49 +1033,77 @@ bool LogViewerService::exportLog(const QString &outDir, const QString &in, bool 
     return true;
 }
 
-bool LogViewerService::exportOpsLog()
+QString LogViewerService::exportOpsLog()
 {
     if(!checkAuth(s_Action_View)) { //非法调用
         qCWarning(logService) << "Invalid authorization for export log";
-        return false;
+        return QString();
     }
 
-    QString callerHomeDir = getCallerHomeDir();
-    if (callerHomeDir.isEmpty()) {
-        qCWarning(logService) << "Failed to get caller home directory for export log";
-        return false;
+    QString callerHomeDir;
+    uint callerUid = 0;
+    uint callerGid = 0;
+    if (!getCallerHomeAndIds(callerHomeDir, callerUid, callerGid)) {
+        qCWarning(logService) << "Failed to get caller identity for export log";
+        return QString();
     }
 
     // 不支持导出 sudo 权限的日志，且导出日志功能主要面向普通用户使用场景，
     // 因此当获取到的用户家目录为根目录时，认为是异常情况，不执行导出操作
     if (callerHomeDir == "/" || callerHomeDir == "/root") {
         qCWarning(logService) << "Invalid caller home directory for export log: " << callerHomeDir;
-        return false;
+        return QString();
     }
 
-    QString newOutDir = callerHomeDir + "/.local/share/"
-            + kOrgNameForDeepinLogViewer + "/"
-            + kAppNameForDeepinLogViewer + "/tmp/log-ops/";
+    // 安全改进：root 服务不再写入用户家目录（避免符号链接攻击面），
+    // 改为在 /var/log 下创建随机临时目录，由 root 完全控制。
+    // 导出完成后将路径返回给前端，由前端以普通用户身份拷贝到自己的临时目录。
 
-    OpsLogExport ops(newOutDir.toStdString(), callerHomeDir.toStdString());
+    // 清理 /var/log 下可能遗留的旧导出临时目录（前次导出若前端异常退出可能未清理）
+    {
+        QDir varLogDir("/var/log");
+        const QStringList oldDirs = varLogDir.entryList(QStringList() << "deepin-log-viewer-ops-log.*",
+                                                        QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &oldDir : oldDirs) {
+            const QString oldPath = "/var/log/" + oldDir;
+            // 删除前再次验证是普通目录且非符号链接，防止误删
+            QFileInfo oldInfo(oldPath);
+            if (oldInfo.isDir() && !oldInfo.isSymLink()) {
+                if (!QDir(oldPath).removeRecursively()) {
+                    qCWarning(logService) << "exportOpsLog: failed to remove stale temp dir:" << oldPath;
+                }
+            }
+        }
+    }
+
+    QTemporaryDir tmpOpsDir("/var/log/deepin-log-viewer-ops-log.XXXXXX");
+    tmpOpsDir.setAutoRemove(false);
+    if (!tmpOpsDir.isValid()) {
+        qCWarning(logService) << "exportOpsLog: failed to create temporary dir under /var/log:" << tmpOpsDir.errorString();
+        return QString();
+    }
+
+    const QString opsDir = tmpOpsDir.path();
+    // 临时目录离开作用域后不会被自动删除（AutoRemove=false），路径交由 OpsLogExport 使用
+    OpsLogExport ops(opsDir.toStdString(), callerUid, callerGid);
     ops.run();
 
-    return true;
+    return opsDir;
 }
 
-QString LogViewerService::getCallerHomeDir()
+bool LogViewerService::getCallerHomeAndIds(QString &outHome, uint &outUid, uint &outGid)
 {
     if (!calledFromDBus()) {
-        qWarning() << "getCallerHomeDir: called not from dbus.";
-        return QString();
+        qWarning() << "getCallerHomeAndIds: called not from dbus.";
+        return false;
     }
 
     QString busName = message().service();
     auto reply = connection().interface()->serviceUid(busName);
     if (!reply.isValid()) {
-        qCWarning(logService) << "getCallerHomeDir: failed to get caller UID via D-Bus:"
+        qCWarning(logService) << "getCallerHomeAndIds: failed to get caller UID via D-Bus:"
                               << reply.error().message();
-        return QString();
+        return false;
     }
 
     uint callerUid = reply.value();
@@ -1089,11 +1119,14 @@ QString LogViewerService::getCallerHomeDir()
 
     int ret = getpwuid_r(static_cast<uid_t>(callerUid), &pwd, buf.data(), buf.size(), &result);
     if (ret == 0 && result) {
-        return QString::fromLocal8Bit(pwd.pw_dir);
+        outHome = QString::fromLocal8Bit(pwd.pw_dir);
+        outUid = callerUid;
+        outGid = static_cast<uint>(pwd.pw_gid);
+        return true;
     }
 
-    qCCritical(logService) << "getCallerHomeDir: failed to resolve uid:" << callerUid << "error:" << ret;
-    return QString();
+    qCCritical(logService) << "getCallerHomeAndIds: failed to resolve uid:" << callerUid << "error:" << ret;
+    return false;
 }
 
 bool LogViewerService::checkAuth(const QString &actionId)

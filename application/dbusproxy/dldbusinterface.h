@@ -55,7 +55,7 @@ public Q_SLOTS: // METHODS
         return asyncCallWithArgumentList(QStringLiteral("exportLog"), argumentList);
     }
 
-    inline QDBusPendingReply<bool> exportOpsLog()
+    inline QDBusPendingReply<QString> exportOpsLog()
     {
         QList<QVariant> argumentList;
         return asyncCallWithArgumentList(QStringLiteral("exportOpsLog"), argumentList);
